@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meme Face</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Meme Face</h1>
+
+    <div id="stage" class="stage">
+      <video id="video" autoplay muted playsinline></video>
+      <!-- The anchor owns position and tilt; the img owns the fade/pop, so the
+           two animations do not compete for the same transform property. -->
+      <div id="meme-anchor" class="meme-anchor">
+        <img id="meme" class="meme" alt="">
+      </div>
+    </div>
+
+    <p id="status" class="status status--loading">Starting up&hellip;</p>
+
+    <div id="controls" class="controls"></div>
+
+    <div class="controls">
+      <button id="calibrate" type="button" class="control control--primary">Calibrate</button>
+      <button id="clear-calibration" type="button" class="control">Clear calibration</button>
+    </div>
+
+    <p id="calibration-status" class="calibration-status"></p>
+  </main>
+
+  <script src="vendor/face-api.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
