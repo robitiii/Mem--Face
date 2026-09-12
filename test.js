@@ -38,7 +38,8 @@ const ctx = {
 ctx.globalThis = ctx;
 
 const src = fs.readFileSync('script.js', 'utf8') +
-  '\n;globalThis.__t = { state, CONFIG, RULES, EXPRESSIONS, matchRule, zScore, finishCalibration, calibrationWarnings };';
+  '\n;globalThis.__t = { state, CONFIG, RULES, EXPRESSIONS, matchRule, zScore, finishCalibration,' +
+  ' calibrationWarnings, handsTouchingFace, ruleKey, GESTURE_STRENGTH };';
 
 vm.createContext(ctx);
 new vm.Script(src).runInContext(ctx);
@@ -132,6 +133,56 @@ check('smiling baseline warns',
     .some((w) => w.includes('smiling')));
 check('clean baseline warns about nothing',
   t.calibrationWarnings({ mean: { happy: 0.02, surprised: 0.02, neutral: 0.9 }, sigma: {} }).length === 0);
+
+// --- 6. Hand-to-face contact -------------------------------------------------
+console.log('\nHand-to-face contact');
+// Video is 640x480 in the stub. Box 100,100 200x200 grows by 15% margin to
+// x 70..330, y 70..330 -> normalised x 0.109..0.516, y 0.146..0.687.
+const box = { x: 100, y: 100, width: 200, height: 200 };
+const pt = (x, y) => ({ x, y });
+const hand = (n, x, y) => Array.from({ length: n }, () => pt(x, y));
+
+check('5 landmarks inside the box counts as contact',
+  t.handsTouchingFace({ landmarks: [hand(5, 0.3, 0.4)] }, box) === true);
+
+check('3 landmarks inside is below handContactPoints',
+  t.handsTouchingFace({ landmarks: [[...hand(3, 0.3, 0.4), ...hand(5, 0.95, 0.95)]] }, box) === false);
+
+check('hand entirely outside the box is not contact',
+  t.handsTouchingFace({ landmarks: [hand(21, 0.95, 0.95)] }, box) === false);
+
+check('second hand can satisfy contact alone',
+  t.handsTouchingFace({ landmarks: [hand(21, 0.95, 0.95), hand(6, 0.3, 0.4)] }, box) === true);
+
+check('no hands detected is not contact',
+  t.handsTouchingFace({ landmarks: [] }, box) === false);
+
+check('null hand result is not contact', t.handsTouchingFace(null, box) === false);
+
+// --- 7. Gesture rules in matchRule ------------------------------------------
+console.log('\nGesture rules');
+t.state.baseline = null;
+const calm = { neutral: 0.9, happy: 0.02, sad: 0.02, angry: 0.02, fearful: 0.01, disgusted: 0.01, surprised: 0.02 };
+
+t.state.gestures.handsToFace = false;
+m = t.matchRule(calm);
+check('gesture rule does not fire when the gesture is absent',
+  !m || m.rule.gesture !== 'handsToFace', m && t.ruleKey(m.rule));
+
+t.state.gestures.handsToFace = true;
+m = t.matchRule(calm);
+check('gesture rule fires when the gesture is present',
+  m && m.rule.gesture === 'handsToFace', m && t.ruleKey(m.rule));
+
+// A big grin plus hands up: the deliberate gesture should win.
+m = t.matchRule({ neutral: 0.05, happy: 0.92, sad: 0, angry: 0, fearful: 0, disgusted: 0, surprised: 0.03 });
+check('gesture outranks a strongly-firing expression',
+  m && m.rule.gesture === 'handsToFace', m && t.ruleKey(m.rule));
+
+check('ruleKey reads gesture rules', t.ruleKey({ gesture: 'handsToFace' }) === 'handsToFace');
+check('ruleKey reads expression rules', t.ruleKey({ expression: 'happy' }) === 'happy');
+
+t.state.gestures.handsToFace = false;
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

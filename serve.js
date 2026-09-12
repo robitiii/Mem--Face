@@ -16,6 +16,10 @@ const contentTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  // Must be exactly application/wasm or streaming instantiation refuses it.
+  '.wasm': 'application/wasm',
+  '.task': 'application/octet-stream',
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

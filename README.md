@@ -34,6 +34,11 @@ Three models run per tick (~160ms), all from `models/`:
 | `faceLandmark68Net` | 68 facial landmarks for position, scale and tilt |
 | `faceExpressionNet` | scores 7 expression classes |
 
+Hand gestures come from a second runtime — MediaPipe's `HandLandmarker` —
+because face-api has no hand model at all. It loads in the background after the
+face pipeline is already running and runs on every other tick, so the demo
+works fine (minus gestures) if it fails or is still downloading.
+
 The sticker is positioned from the landmarks rather than the raw detection box:
 its centre is the midpoint between the eye line and the mouth, its width is a
 multiple of **interocular distance** (far steadier frame-to-frame than box
@@ -52,6 +57,16 @@ Rules live at the top of `script.js`:
 ```js
 { expression: 'surprised', threshold: 0.7, sigma: 3.0, src: 'memes/confused.jpg' }
 ```
+
+Gesture rules use a boolean instead of a score:
+
+```js
+{ gesture: 'handsToFace', src: 'memes/hands.png', cooldownMs: 2500 }
+```
+
+`handsToFace` fires when at least 4 hand landmarks fall inside the face box
+(grown by 15%). Gestures outrank every expression rule — putting your hands up
+is deliberate in a way that a passing expression is not.
 
 A rule fires when its expression clears the bar on two consecutive ticks, then
 a cooldown blocks re-triggering for 1.5s. Rules can override both (`ticks`,
@@ -113,7 +128,8 @@ z-scores and rule matching — the parts that are hard to eyeball in a browser.
 ## Credits
 
 Face detection and expression classification by
-[face-api.js](https://github.com/justadudewhohacks/face-api.js).
+[face-api.js](https://github.com/justadudewhohacks/face-api.js). Hand tracking by
+[MediaPipe Tasks Vision](https://developers.google.com/mediapipe).
 
 The calibration approach is borrowed from
 [gazijarin/itsgiving](https://github.com/gazijarin/itsgiving), which solves the

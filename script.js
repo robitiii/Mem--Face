@@ -13,7 +13,7 @@
 // is already high and "above baseline" is not a meaningful trigger.
 const RULES = [
   { expression: 'surprised', threshold: 0.7, sigma: 3.0, src: 'memes/confused.jpg' },
-  { expression: 'happy', threshold: 0.8, sigma: 3.0, src: 'memes/laughing.jpg' },
+  { expression: 'happy', threshold: 0.8, sigma: 3.0, src: 'memes/laughing.png' },
   { expression: 'angry', threshold: 0.7, sigma: 3.0, src: 'memes/angry.png' },
   { expression: 'fearful', threshold: 0.5, sigma: 2.5, src: 'memes/fearful.jpg' },
   { expression: 'disgusted', threshold: 0.5, sigma: 2.5, src: 'memes/disgusted.jpg' },
@@ -22,7 +22,14 @@ const RULES = [
   // resting score, so this rule needs a long dwell and a long cooldown or it
   // would fire on a loop any time you sit still.
   { expression: 'neutral', threshold: 0.9, src: 'memes/bored.jpg', ticks: 40, cooldownMs: 20000 },
+  // Gesture rules are boolean rather than scored, and come from MediaPipe's
+  // hand landmarker rather than face-api. A deliberate gesture outranks any
+  // incidental expression — see GESTURE_STRENGTH.
+  { gesture: 'handsToFace', src: 'memes/hands.png', cooldownMs: 2500 },
 ];
+
+/** Ranked above every expression rule: putting your hands up is intentional. */
+const GESTURE_STRENGTH = 10;
 
 const EXPRESSIONS = ['neutral', 'happy', 'sad', 'angry', 'fearful', 'disgusted', 'surprised'];
 
@@ -43,6 +50,15 @@ const CONFIG = {
   sigmaMinScore: 0.15, // absolute floor, so tiny-but-unusual scores cannot fire
   logScores: true, // console.log expression scores (throttled)
   logEveryMs: 1000,
+
+  // Hand tracking. The wasm runtime and model are ~20MB together, so this
+  // loads in the background after the face pipeline is already running.
+  handWasmPath: 'vendor/tasks-vision/wasm',
+  handModelPath: 'models/hand_landmarker.task',
+  handBundlePath: './vendor/tasks-vision/vision_bundle.mjs',
+  handEveryTicks: 2, // run hand detection on every Nth tick to limit the cost
+  handContactPoints: 4, // landmarks inside the face box before it counts as contact
+  handFaceMargin: 0.15, // grow the face box by this fraction when testing contact
 };
 
 const STORAGE_KEY = 'meme-face-baseline';
@@ -66,6 +82,10 @@ const state = {
   lastLogAt: 0,
   baseline: null,
   calibrating: null,
+  handLandmarker: null,
+  gestures: { handsToFace: false },
+  ticks: 0,
+  lastHandTimestamp: 0,
 };
 
 function setStatus(kind, message) {
@@ -158,6 +178,66 @@ function smoothGeometry(geometry) {
   return smoothed;
 }
 
+// ---------------------------------------------------------------------------
+// Hand tracking
+//
+// face-api has no hand model, so gestures come from MediaPipe's hand
+// landmarker. It is a separate runtime and ~20MB of wasm plus weights, so it
+// loads in the background and the demo runs fine without it.
+// ---------------------------------------------------------------------------
+
+async function initHandTracking() {
+  const vision = await import(CONFIG.handBundlePath);
+  const fileset = await vision.FilesetResolver.forVisionTasks(CONFIG.handWasmPath);
+
+  state.handLandmarker = await vision.HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: CONFIG.handModelPath },
+    runningMode: 'VIDEO',
+    numHands: 2,
+  });
+}
+
+/**
+ * True when enough hand landmarks fall inside the face box.
+ *
+ * Landmarks arrive normalised to 0-1, so they scale to the video's natural
+ * pixels. Requiring several points rather than one stops a fingertip drifting
+ * past your cheek from counting as covering your face.
+ */
+function handsTouchingFace(handResult, box) {
+  if (!handResult || !handResult.landmarks) return false;
+
+  const marginX = box.width * CONFIG.handFaceMargin;
+  const marginY = box.height * CONFIG.handFaceMargin;
+  const left = box.x - marginX;
+  const right = box.x + box.width + marginX;
+  const top = box.y - marginY;
+  const bottom = box.y + box.height + marginY;
+
+  for (const hand of handResult.landmarks) {
+    let inside = 0;
+    for (const point of hand) {
+      const x = point.x * video.videoWidth;
+      const y = point.y * video.videoHeight;
+      if (x >= left && x <= right && y >= top && y <= bottom) inside += 1;
+      if (inside >= CONFIG.handContactPoints) return true;
+    }
+  }
+
+  return false;
+}
+
+function detectGestures(box) {
+  if (!state.handLandmarker) return;
+
+  // MediaPipe rejects timestamps that do not strictly increase.
+  const timestamp = Math.max(performance.now(), state.lastHandTimestamp + 1);
+  state.lastHandTimestamp = timestamp;
+
+  const handResult = state.handLandmarker.detectForVideo(video, timestamp);
+  state.gestures.handsToFace = handsTouchingFace(handResult, box);
+}
+
 /** Centre of frame, for manual button presses before any face has been seen. */
 function fallbackGeometry() {
   return {
@@ -210,6 +290,11 @@ function zScore(expression, value) {
   return (value - mean) / sigma;
 }
 
+/** Rules are keyed by expression or gesture, whichever they use. */
+function ruleKey(rule) {
+  return rule.expression ?? rule.gesture;
+}
+
 /**
  * Best matching rule, or null.
  *
@@ -220,6 +305,14 @@ function matchRule(expressions) {
   let best = null;
 
   for (const rule of RULES) {
+    if (rule.gesture) {
+      if (!state.gestures[rule.gesture]) continue;
+      if (!best || GESTURE_STRENGTH > best.strength) {
+        best = { rule, strength: GESTURE_STRENGTH };
+      }
+      continue;
+    }
+
     const score = expressions[rule.expression] ?? 0;
     let strength;
 
@@ -250,10 +343,10 @@ function evaluate(expressions, geometry) {
   }
 
   // Debounce: the same expression has to clear its bar on consecutive ticks.
-  if (state.streak.expression === match.rule.expression) {
+  if (state.streak.expression === ruleKey(match.rule)) {
     state.streak.count += 1;
   } else {
-    state.streak = { expression: match.rule.expression, count: 1 };
+    state.streak = { expression: ruleKey(match.rule), count: 1 };
   }
 
   const ticksNeeded = match.rule.ticks ?? CONFIG.ticksToTrigger;
@@ -395,7 +488,7 @@ function buildControls() {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'control';
-    button.textContent = rule.expression;
+    button.textContent = rule.gesture ? 'hands to face' : rule.expression;
     button.addEventListener('click', () => {
       // Skip the debounce and cooldown, but stamp the trigger time so the
       // detector does not immediately replace what you just asked for.
@@ -450,6 +543,7 @@ async function tick() {
   }
 
   state.misses = 0;
+  state.ticks += 1;
 
   const geometry = smoothGeometry(faceGeometry(result));
   state.lastGeometry = geometry;
@@ -457,6 +551,16 @@ async function tick() {
   if (state.calibrating) {
     collectCalibrationSample(result.expressions);
     return;
+  }
+
+  // Hand detection is the expensive half, so it runs at a fraction of the
+  // face cadence and its last verdict carries over between runs.
+  if (state.handLandmarker && state.ticks % CONFIG.handEveryTicks === 0) {
+    try {
+      detectGestures(result.detection.box);
+    } catch (error) {
+      console.error('Hand detection failed:', error);
+    }
   }
 
   if (CONFIG.logScores) logScores(result.expressions);
@@ -539,8 +643,18 @@ async function main() {
     return;
   }
 
-  setStatus('ready', 'Ready — pull a face.');
+  setStatus('ready', 'Ready — pull a face. (loading hand tracking…)');
   runLoop();
+
+  // Deliberately not awaited: ~20MB of wasm and weights should not hold up the
+  // demo, and a failure here must not take the expression pipeline down.
+  initHandTracking().then(
+    () => setStatus('ready', 'Ready — pull a face, or put your hands up.'),
+    (error) => {
+      console.error('Hand tracking unavailable:', error);
+      setStatus('ready', 'Ready — pull a face. (hand tracking failed to load)');
+    }
+  );
 }
 
 main();
