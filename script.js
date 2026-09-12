@@ -29,7 +29,7 @@ const RULES = [
   // It has no `threshold`, only a `sigma`, which means it cannot fire until you
   // calibrate — there is no sensible absolute value for "eyebrows up", it is
   // only meaningful relative to where your brows normally sit.
-  { expression: 'browRaise', sigma: 2.5, src: 'memes/eyebrow.jpg', cooldownMs: 2000 },
+  { expression: 'browRaise', sigma: 2.5, src: 'memes/eyebrow.png', cooldownMs: 2000 },
   // Gesture rules are boolean rather than scored, and come from MediaPipe's
   // hand landmarker rather than face-api. A deliberate gesture outranks any
   // incidental expression — see GESTURE_STRENGTH.
