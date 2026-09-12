@@ -71,9 +71,11 @@ Gesture rules use a boolean instead of a score:
 { gesture: 'handsToFace', src: 'memes/hands.png', cooldownMs: 2500 }
 ```
 
-`handsToFace` fires when at least 4 hand landmarks fall inside the face box
-(grown by 15%). Gestures outrank every expression rule — putting your hands up
-is deliberate in a way that a passing expression is not.
+`handsToFace` fires when **both** hands each have at least 4 landmarks inside
+the face box (grown by 15%). Requiring two hands stops a single hand resting on
+your chin from triggering it; set `handsRequired: 1` in `CONFIG` for the looser
+behaviour. Gestures outrank every expression rule — putting your hands up is
+deliberate in a way that a passing expression is not.
 
 A rule fires when its expression clears the bar on two consecutive ticks, then
 a cooldown blocks re-triggering for 1.5s. Rules can override both (`ticks`,

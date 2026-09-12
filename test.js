@@ -142,22 +142,32 @@ const box = { x: 100, y: 100, width: 200, height: 200 };
 const pt = (x, y) => ({ x, y });
 const hand = (n, x, y) => Array.from({ length: n }, () => pt(x, y));
 
-check('5 landmarks inside the box counts as contact',
-  t.handsTouchingFace({ landmarks: [hand(5, 0.3, 0.4)] }, box) === true);
+check('both hands inside the box counts as contact',
+  t.handsTouchingFace({ landmarks: [hand(5, 0.3, 0.4), hand(5, 0.35, 0.45)] }, box) === true);
 
-check('3 landmarks inside is below handContactPoints',
-  t.handsTouchingFace({ landmarks: [[...hand(3, 0.3, 0.4), ...hand(5, 0.95, 0.95)]] }, box) === false);
+check('ONE hand inside is not enough (both hands required)',
+  t.handsTouchingFace({ landmarks: [hand(21, 0.3, 0.4)] }, box) === false);
 
-check('hand entirely outside the box is not contact',
-  t.handsTouchingFace({ landmarks: [hand(21, 0.95, 0.95)] }, box) === false);
+check('one hand in, one hand out is not enough',
+  t.handsTouchingFace({ landmarks: [hand(21, 0.3, 0.4), hand(21, 0.95, 0.95)] }, box) === false);
 
-check('second hand can satisfy contact alone',
-  t.handsTouchingFace({ landmarks: [hand(21, 0.95, 0.95), hand(6, 0.3, 0.4)] }, box) === true);
+check('3 landmarks per hand is below handContactPoints',
+  t.handsTouchingFace({
+    landmarks: [
+      [...hand(3, 0.3, 0.4), ...hand(5, 0.95, 0.95)],
+      [...hand(3, 0.35, 0.45), ...hand(5, 0.95, 0.95)],
+    ],
+  }, box) === false);
+
+check('both hands entirely outside the box is not contact',
+  t.handsTouchingFace({ landmarks: [hand(21, 0.95, 0.95), hand(21, 0.9, 0.9)] }, box) === false);
 
 check('no hands detected is not contact',
   t.handsTouchingFace({ landmarks: [] }, box) === false);
 
 check('null hand result is not contact', t.handsTouchingFace(null, box) === false);
+
+check('handsRequired is 2', t.CONFIG.handsRequired === 2);
 
 // --- 7. Gesture rules in matchRule ------------------------------------------
 console.log('\nGesture rules');

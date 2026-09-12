@@ -71,7 +71,8 @@ const CONFIG = {
   handModelPath: 'models/hand_landmarker.task',
   handBundlePath: './vendor/tasks-vision/vision_bundle.mjs',
   handEveryTicks: 2, // run hand detection on every Nth tick to limit the cost
-  handContactPoints: 4, // landmarks inside the face box before it counts as contact
+  handContactPoints: 4, // landmarks inside the face box before a hand counts as touching
+  handsRequired: 2, // how many hands must be touching — 2 means both, 1 means either
   handFaceMargin: 0.15, // grow the face box by this fraction when testing contact
 };
 
@@ -236,11 +237,13 @@ async function initHandTracking() {
 }
 
 /**
- * True when enough hand landmarks fall inside the face box.
+ * True when `handsRequired` hands each have enough landmarks inside the face
+ * box.
  *
  * Landmarks arrive normalised to 0-1, so they scale to the video's natural
- * pixels. Requiring several points rather than one stops a fingertip drifting
- * past your cheek from counting as covering your face.
+ * pixels. Requiring several points per hand stops a fingertip drifting past
+ * your cheek from counting, and requiring two hands stops a single hand resting
+ * on your chin from firing the sticker.
  */
 function handsTouchingFace(handResult, box) {
   if (!handResult || !handResult.landmarks) return false;
@@ -252,17 +255,22 @@ function handsTouchingFace(handResult, box) {
   const top = box.y - marginY;
   const bottom = box.y + box.height + marginY;
 
+  let handsInContact = 0;
+
   for (const hand of handResult.landmarks) {
     let inside = 0;
     for (const point of hand) {
       const x = point.x * video.videoWidth;
       const y = point.y * video.videoHeight;
       if (x >= left && x <= right && y >= top && y <= bottom) inside += 1;
-      if (inside >= CONFIG.handContactPoints) return true;
+      if (inside >= CONFIG.handContactPoints) {
+        handsInContact += 1;
+        break;
+      }
     }
   }
 
-  return false;
+  return handsInContact >= CONFIG.handsRequired;
 }
 
 function detectGestures(box) {
