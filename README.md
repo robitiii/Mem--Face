@@ -58,6 +58,13 @@ Rules live at the top of `script.js`:
 { expression: 'surprised', threshold: 0.7, sigma: 3.0, src: 'memes/confused.jpg' }
 ```
 
+Some rules read a **metric derived from the 68 landmarks** rather than an
+expression score. `browRaise` is the vertical gap between brows and eyes,
+divided by interocular distance so leaning toward the camera does not trigger
+it. It has a `sigma` but no `threshold`, which means **it cannot fire until you
+calibrate** — brow height varies too much between faces for an absolute number
+to mean anything.
+
 Gesture rules use a boolean instead of a score:
 
 ```js

@@ -3,8 +3,11 @@
 // Sticker files live in memes/. Any format the browser can render works,
 // including animated .gif. Nothing here generates or fetches images.
 //
-// Each rule fires on one of face-api's seven expression classes:
-//   neutral, happy, sad, angry, fearful, disgusted, surprised
+// A rule fires on one of three things:
+//   - one of face-api's seven expression classes (neutral, happy, sad, angry,
+//     fearful, disgusted, surprised)
+//   - a metric derived from the 68 face landmarks, e.g. browRaise
+//   - a boolean gesture from MediaPipe's hand landmarker, e.g. handsToFace
 //
 // `threshold` is an absolute score (0-1), used when uncalibrated.
 // `sigma` is how many standard deviations above YOUR resting face the score
@@ -22,6 +25,11 @@ const RULES = [
   // resting score, so this rule needs a long dwell and a long cooldown or it
   // would fire on a loop any time you sit still.
   { expression: 'neutral', threshold: 0.9, src: 'memes/bored.jpg', ticks: 40, cooldownMs: 20000 },
+  // Brow raise is measured from the 68 landmarks, not from the expression net.
+  // It has no `threshold`, only a `sigma`, which means it cannot fire until you
+  // calibrate — there is no sensible absolute value for "eyebrows up", it is
+  // only meaningful relative to where your brows normally sit.
+  { expression: 'browRaise', sigma: 2.5, src: 'memes/eyebrow.jpg', cooldownMs: 2000 },
   // Gesture rules are boolean rather than scored, and come from MediaPipe's
   // hand landmarker rather than face-api. A deliberate gesture outranks any
   // incidental expression — see GESTURE_STRENGTH.
@@ -32,6 +40,12 @@ const RULES = [
 const GESTURE_STRENGTH = 10;
 
 const EXPRESSIONS = ['neutral', 'happy', 'sad', 'angry', 'fearful', 'disgusted', 'surprised'];
+
+/** Landmark-derived signals that ride alongside the expression scores. */
+const METRICS = ['browRaise'];
+
+/** Everything calibration records a mean and sigma for. */
+const CHANNELS = [...EXPRESSIONS, ...METRICS];
 
 const CONFIG = {
   modelUri: 'models',
@@ -155,6 +169,30 @@ function faceGeometry(result) {
     width: Math.hypot(dx, dy) * CONFIG.eyeScale,
     angle: (Math.atan2(dy, dx) * 180) / Math.PI,
   };
+}
+
+/**
+ * How far the eyebrows sit above the eyes, as a fraction of interocular
+ * distance.
+ *
+ * Dividing by eye spacing makes it scale-invariant: leaning toward the camera
+ * moves every landmark but leaves the ratio alone. There is no useful absolute
+ * value here — brow height varies enormously between faces — so this is only
+ * ever read as a deviation from your calibrated baseline.
+ */
+function browRaise(landmarks) {
+  if (!landmarks) return 0;
+
+  const leftEye = centroid(landmarks.getLeftEye());
+  const rightEye = centroid(landmarks.getRightEye());
+  const interocular = Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y);
+  if (!interocular) return 0;
+
+  const browY = (centroid(landmarks.getLeftEyeBrow()).y + centroid(landmarks.getRightEyeBrow()).y) / 2;
+  const eyeY = (leftEye.y + rightEye.y) / 2;
+
+  // y grows downward, so eyes minus brows is positive and grows as brows lift.
+  return (eyeY - browY) / interocular;
 }
 
 /**
@@ -321,9 +359,11 @@ function matchRule(expressions) {
       const z = zScore(rule.expression, score);
       if (z < rule.sigma) continue;
       strength = z / rule.sigma;
-    } else {
+    } else if (rule.threshold != null) {
       if (score <= rule.threshold) continue;
       strength = score / rule.threshold;
+    } else {
+      continue; // sigma-only rule with nothing calibrated to compare against
     }
 
     if (!best || strength > best.strength) {
@@ -406,7 +446,7 @@ function finishCalibration() {
   const mean = {};
   const sigma = {};
 
-  for (const name of EXPRESSIONS) {
+  for (const name of CHANNELS) {
     const values = samples.map((sample) => sample[name] ?? 0);
     const average = values.reduce((a, b) => a + b, 0) / values.length;
     const variance = values.reduce((a, b) => a + (b - average) ** 2, 0) / values.length;
@@ -429,7 +469,7 @@ function calibrationWarnings(baseline) {
   if (baseline.mean.surprised > 0.25) warnings.push('your brows looked raised');
   if (baseline.mean.neutral < 0.5) warnings.push('your resting face did not read as neutral');
 
-  const pinned = EXPRESSIONS.filter((name) => baseline.sigma[name] >= CONFIG.sigmaCeil).length;
+  const pinned = CHANNELS.filter((name) => baseline.sigma[name] >= CONFIG.sigmaCeil).length;
   if (pinned >= 3) warnings.push('you moved a lot, so the baseline is loose');
 
   return warnings;
@@ -443,7 +483,7 @@ function reportBaseline() {
     return;
   }
 
-  const summary = EXPRESSIONS.map(
+  const summary = CHANNELS.map(
     (name) => name + ' ' + baseline.mean[name].toFixed(2) + '±' + baseline.sigma[name].toFixed(2)
   ).join('   ');
 
@@ -548,8 +588,12 @@ async function tick() {
   const geometry = smoothGeometry(faceGeometry(result));
   state.lastGeometry = geometry;
 
+  // Landmark-derived metrics join the expression scores so they calibrate and
+  // match through exactly the same machinery.
+  const channels = { ...result.expressions, browRaise: browRaise(result.landmarks) };
+
   if (state.calibrating) {
-    collectCalibrationSample(result.expressions);
+    collectCalibrationSample(channels);
     return;
   }
 
@@ -563,8 +607,8 @@ async function tick() {
     }
   }
 
-  if (CONFIG.logScores) logScores(result.expressions);
-  evaluate(result.expressions, geometry);
+  if (CONFIG.logScores) logScores(channels);
+  evaluate(channels, geometry);
 
   // Keep an already-visible sticker glued to the face as it moves.
   if (meme.classList.contains('is-visible')) {

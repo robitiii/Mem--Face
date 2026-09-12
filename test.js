@@ -39,7 +39,7 @@ ctx.globalThis = ctx;
 
 const src = fs.readFileSync('script.js', 'utf8') +
   '\n;globalThis.__t = { state, CONFIG, RULES, EXPRESSIONS, matchRule, zScore, finishCalibration,' +
-  ' calibrationWarnings, handsTouchingFace, ruleKey, GESTURE_STRENGTH };';
+  ' calibrationWarnings, handsTouchingFace, ruleKey, GESTURE_STRENGTH, browRaise, CHANNELS };';
 
 vm.createContext(ctx);
 new vm.Script(src).runInContext(ctx);
@@ -183,6 +183,70 @@ check('ruleKey reads gesture rules', t.ruleKey({ gesture: 'handsToFace' }) === '
 check('ruleKey reads expression rules', t.ruleKey({ expression: 'happy' }) === 'happy');
 
 t.state.gestures.handsToFace = false;
+
+// --- 8. Brow raise metric ----------------------------------------------------
+console.log('\nBrow raise metric');
+// Eyes 40px apart; brows 10px above them -> ratio 0.25.
+const marks = (browOffset) => ({
+  getLeftEye: () => [{ x: 100, y: 100 }],
+  getRightEye: () => [{ x: 140, y: 100 }],
+  getLeftEyeBrow: () => [{ x: 100, y: 100 - browOffset }],
+  getRightEyeBrow: () => [{ x: 140, y: 100 - browOffset }],
+});
+
+check('brows 10px above eyes 40px apart -> 0.25',
+  Math.abs(t.browRaise(marks(10)) - 0.25) < 1e-9, t.browRaise(marks(10)));
+check('raising the brows increases the ratio',
+  t.browRaise(marks(20)) > t.browRaise(marks(10)));
+check('null landmarks -> 0', t.browRaise(null) === 0);
+
+// Scale invariance: double every coordinate, ratio must not move.
+const scaled = {
+  getLeftEye: () => [{ x: 200, y: 200 }],
+  getRightEye: () => [{ x: 280, y: 200 }],
+  getLeftEyeBrow: () => [{ x: 200, y: 180 }],
+  getRightEyeBrow: () => [{ x: 280, y: 180 }],
+};
+check('ratio is scale-invariant (leaning in must not trigger it)',
+  Math.abs(t.browRaise(scaled) - t.browRaise(marks(10))) < 1e-9,
+  t.browRaise(scaled) + ' vs ' + t.browRaise(marks(10)));
+
+check('browRaise is a calibrated channel', t.CHANNELS.includes('browRaise'));
+
+// --- 9. Sigma-only rules require calibration ---------------------------------
+console.log('\nSigma-only rules');
+const browRule = t.RULES.find((r) => r.expression === 'browRaise');
+check('browRaise rule has no absolute threshold', browRule && browRule.threshold === undefined);
+
+t.state.baseline = null;
+t.state.gestures.handsToFace = false;
+m = t.matchRule({ neutral: 0.9, happy: 0.01, sad: 0.01, angry: 0.01, fearful: 0.01, disgusted: 0.01, surprised: 0.01, browRaise: 5.0 });
+check('sigma-only rule cannot fire while uncalibrated (even at an absurd value)',
+  !m || m.rule.expression !== 'browRaise', m && t.ruleKey(m.rule));
+
+// Calibrate with brows resting at 0.25, sd clamped to the floor (0.01).
+t.state.calibrating = {
+  samples: Array.from({ length: 24 }, (_, i) => ({
+    neutral: 0.9, happy: 0.01, sad: 0.01, angry: 0.01,
+    fearful: 0.01, disgusted: 0.01, surprised: 0.01,
+    browRaise: 0.25 + (i % 2 ? 0.01 : -0.01),
+  })),
+  startedAt: 0,
+};
+t.finishCalibration();
+check('baseline records browRaise', Math.abs(t.state.baseline.mean.browRaise - 0.25) < 1e-9,
+  t.state.baseline.mean.browRaise);
+
+const browSigma = t.state.baseline.sigma.browRaise;
+m = t.matchRule({ neutral: 0.5, happy: 0.01, sad: 0.01, angry: 0.01, fearful: 0.01, disgusted: 0.01, surprised: 0.01,
+  browRaise: 0.25 + 4 * browSigma });
+check('browRaise fires at 4 sigma once calibrated',
+  m && m.rule.expression === 'browRaise', m && t.ruleKey(m.rule));
+
+m = t.matchRule({ neutral: 0.5, happy: 0.01, sad: 0.01, angry: 0.01, fearful: 0.01, disgusted: 0.01, surprised: 0.01,
+  browRaise: 0.25 + 1 * browSigma });
+check('browRaise does not fire at 1 sigma',
+  !m || m.rule.expression !== 'browRaise', m && t.ruleKey(m.rule));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
